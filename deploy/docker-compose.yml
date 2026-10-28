@@ -1,0 +1,26 @@
+# Run the published image (no source code, no build). Put this file and .env (copied from .env.example) in one folder:
+#   docker compose pull && docker compose up -d
+# Update later: the same two commands. Your videos and settings stay in ./data.
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/baotuo88/baotuo-teacher-video:latest}
+    container_name: baotuo-teacher-video
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./data:/data
+    # Chromium needs a larger /dev/shm than Docker's 64MB default
+    shm_size: "2gb"
+    environment:
+      # leave empty to run without a password (only on a trusted network)
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      # optional: model credentials (the Settings page can set them too; the page wins once saved)
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      # anthropic only: x-api-key (official) or bearer (most relay services)
+      LLM_AUTH: ${LLM_AUTH:-x-api-key}
+      TTS_API_KEY: ${TTS_API_KEY:-}
+      TZ: ${TZ:-Asia/Shanghai}

@@ -1,0 +1,13 @@
+.git
+.venv
+data
+**/node_modules
+**/__pycache__
+frontend/dist
+vendor/deps
+vendor/engine/node_modules
+*.log
+.env
+.github
+deploy
+.claude

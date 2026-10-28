@@ -1,0 +1,11 @@
+.venv/
+data/
+node_modules/
+__pycache__/
+frontend/dist/
+vendor/*
+!vendor/.gitkeep
+.env
+*.log
+.claude/
+.DS_Store
