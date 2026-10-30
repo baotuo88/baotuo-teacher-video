@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   ArrowDown, ArrowRight, ArrowUp, Braces, Check, Clock, Film, LayoutList, Pencil, Plus, RefreshCw, ScanSearch, Send, Star, Trash2, Video, X,
 } from 'lucide-react';
@@ -42,11 +42,12 @@ const BEAT_LABELS = ['落点', '画什么', '怎么动', '镜头', '上屏文字
 
 export default function StoryboardStep() {
   const { p, reload, run, busy } = useProject();
-  const [sb, setSb] = useState<Storyboard | null>(p.storyboard);
+  // the copy being edited; while viewing, the page shows p.storyboard itself (a copy synced by an effect lags one
+  // render behind, and on the render where a new storyboard arrives it is still null)
+  const [sb, setSb] = useState<Storyboard | null>(null);
   const [mode, setMode] = useState<'view' | 'edit' | 'json'>('view');
   const [raw, setRaw] = useState('');
   const [fb, setFb] = useState('');
-  useEffect(() => { if (mode === 'view') setSb(p.storyboard); }, [p.storyboard, mode]);
 
   if (!p.storyboard) {
     return (
@@ -68,23 +69,23 @@ export default function StoryboardStep() {
     } catch (e) { toast.err(e); }
   };
   const edit = (fn: (s: Storyboard) => void) => {
-    const n = structuredClone(sb!) as Storyboard;
+    const n = structuredClone(sb ?? p.storyboard!) as Storyboard;
     fn(n);
     setSb(n);
   };
-  const s = sb!;
+  const s = (mode === 'edit' && sb) || p.storyboard;
   const approved = p.storyboard_status === 'approved';
   const nBeats = s.pages.reduce((n, pg) => n + pg.beats.length, 0);
 
   const actions = mode === 'view' ? <>
     <button className="ghost" onClick={() => { setRaw(JSON.stringify(p.storyboard, null, 2)); setMode('json'); }}><Braces />JSON</button>
-    <button onClick={() => setMode('edit')}><Pencil />编辑</button>
+    <button onClick={() => { setSb(structuredClone(p.storyboard)); setMode('edit'); }}><Pencil />编辑</button>
     <button disabled={busy} onClick={() => confirm('重新生成会覆盖当前分镜，确定？') && run('storyboard/generate')}><RefreshCw />重新生成</button>
     {!approved && <button className="primary" disabled={busy} onClick={() => api.post(`${P(p.id)}/storyboard/approve`).then(() => run('script/generate'))}><Check />确认分镜，写口播</button>}
     {approved && <button className="primary" disabled={busy} onClick={() => p.overview.script && !confirm('已经有口播了，按分镜重写会覆盖它，确定？') ? null : run('script/generate')}>
       {p.overview.script ? <><RefreshCw />按分镜重写口播</> : <>写口播<ArrowRight /></>}</button>}
   </> : <>
-    <button onClick={() => { setMode('view'); setSb(p.storyboard); }}><X />取消</button>
+    <button onClick={() => { setMode('view'); setSb(null); }}><X />取消</button>
     <button className="primary" onClick={() => {
       if (mode === 'json') { try { save(JSON.parse(raw)); } catch (e) { toast.err(`JSON 格式不对：${(e as Error).message}`); } }
       else save(s);

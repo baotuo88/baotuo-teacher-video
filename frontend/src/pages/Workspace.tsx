@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import {
   AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, Cpu, FileText, Film, FolderOpen,
   Image as ImageIcon, LayoutList, Mic, MonitorPlay, Play, Settings2, Square, Terminal, X,
 } from 'lucide-react';
 import { api, coverThumb, fmtTime, P, type JobLog, type JobSummary, type Project } from '../api';
-import { Spinner, Thumb, toast } from '../ui';
+import { PageBoundary, Spinner, Thumb, toast } from '../ui';
 import Materials from './steps/Materials';
 import StoryboardStep from './steps/Storyboard';
 import ScriptStep from './steps/Script';
@@ -109,6 +109,7 @@ const STEPS: { path: string; name: string; hint: string; icon: typeof FileText }
 
 export default function Workspace() {
   const { pid = '' } = useParams();
+  const loc = useLocation();
   const [p, setP] = useState<Project | null>(null);
   const [err, setErr] = useState('');
   const [job, setJob] = useState<JobSummary | null>(null);
@@ -204,6 +205,7 @@ export default function Workspace() {
           </div>
         </aside>
         <main className="ws-main">
+          <PageBoundary resetKey={loc.pathname}>
           <Routes>
             <Route index element={<Navigate to={`/p/${pid}/${o.film ? 'film' : o.pages_drawn ? 'pages' : o.script ? 'voice' : o.storyboard ? 'storyboard' : 'materials'}`} replace />} />
             <Route path="materials" element={<Materials />} />
@@ -217,6 +219,7 @@ export default function Workspace() {
             {/* an unknown or nested step path goes back to the project's current step */}
             <Route path="*" element={<Navigate to={`/p/${pid}`} replace />} />
           </Routes>
+          </PageBoundary>
         </main>
       </div>
       {lastJob && <JobDock key={lastJob.id} pid={pid} job={lastJob} onEnd={() => { setJob(null); reload(); }} onClose={() => setLastJob(null)} />}

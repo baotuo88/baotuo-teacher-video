@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Component, useEffect, useState, type ReactNode } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
@@ -165,7 +165,32 @@ export function Seg<T extends string | number>({ value, options, onChange, small
   );
 }
 
-export const Logo = ({ large }: { large?: boolean }) => <span className={`logo ${large ? 'lg' : ''}`}><Clapperboard /></span>;
+/** A page that throws while rendering shows this instead of taking the whole app down to a blank screen.
+ *  `resetKey` (e.g. the path) clears it when the user goes elsewhere. */
+export class PageBoundary extends Component<{ resetKey: string; children: ReactNode }, { error: Error | null; key: string }> {
+  state = { error: null as Error | null, key: this.props.resetKey };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  static getDerivedStateFromProps(props: { resetKey: string }, state: { error: Error | null; key: string }) {
+    return props.resetKey !== state.key ? { error: null, key: props.resetKey } : null;
+  }
+  componentDidCatch(error: Error) { console.error('page crashed:', error); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="empty">
+        <div className="empty-ico"><CircleAlert /></div>
+        <h3>这个页面出错了</h3>
+        <p className="mono small">{this.state.error.message}</p>
+        <div className="row">
+          <button className="primary" onClick={() => this.setState({ error: null })}>重试</button>
+          <button onClick={() => window.location.reload()}>刷新页面</button>
+        </div>
+      </div>
+    );
+  }
+}
+
+export const Logo =({ large }: { large?: boolean }) => <span className={`logo ${large ? 'lg' : ''}`}><Clapperboard /></span>;
 
 export const Spinner = ({ small }: { small?: boolean }) => <span className={`spin ${small ? 'sm' : ''}`} />;
 // ── stills ──
