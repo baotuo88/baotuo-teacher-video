@@ -75,6 +75,31 @@ def override_file(d: Path, page_id: str, text: str) -> Path:
     return d / "audio" / f"user-{page_id}-{override_key(page_id, text)}.wav"
 
 
+VOICE_JS_HEAD = "/* Narration timing, one take per cue (written by baotuo-teacher-video; do not edit by hand). */\n"
+
+
+def read_voice_js(d: Path) -> dict | None:
+    """voice.js as data: `SCRIPT.VOICE = {json};` and nothing else, or None."""
+    f = d / "voice.js"
+    if not f.exists():
+        return None
+    src = f.read_text("utf-8", "replace")
+    m = re.search(r"SCRIPT\.VOICE\s*=\s*", src)
+    if not m:
+        return None
+    try:
+        data, end = json.JSONDecoder().raw_decode(src, m.end())
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or src[end:].strip().lstrip(";").strip():
+        return None
+    return data
+
+
+def write_voice_js(d: Path, data: dict) -> None:
+    (d / "voice.js").write_text(VOICE_JS_HEAD + "SCRIPT.VOICE = " + json.dumps(data, ensure_ascii=False) + ";\n", "utf-8")
+
+
 def wav_seconds(f: Path) -> float:
     with wave.open(str(f), "rb") as w:
         return w.getnframes() / float(w.getframerate())
@@ -229,10 +254,7 @@ async def voice_film(d: Path, pid: str, project: dict, tts: dict, log, progress)
     await asyncio.gather(*(one(*x) for x in cues))
     voice_pages = [[result[(pi, ci)] for ci in range(len(p.get("cues", [])))] for pi, p in enumerate(pages)]
     speaker = c["voice"] if c["provider"] == "edge" else c.get("openai_voice", "")
-    (d / "voice.js").write_text(
-        "/* Narration timing, one take per cue (written by baotuo-teacher-video; do not edit by hand). */\n"
-        "SCRIPT.VOICE = " + json.dumps({"speaker": speaker, "provider": c["provider"], "pages": voice_pages},
-                                       ensure_ascii=False) + ";\n", "utf-8")
+    write_voice_js(d, {"speaker": speaker, "provider": c["provider"], "pages": voice_pages})
     # drop takes nothing points at any more (the user's own takes stay)
     used = {x["f"].split("/", 1)[1] for pg in voice_pages for x in pg}
     for f in (d / "audio").glob("*.wav"):

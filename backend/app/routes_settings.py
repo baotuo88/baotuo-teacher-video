@@ -44,7 +44,10 @@ def get_settings() -> dict:
 
 @router.put("/settings")
 def put_settings(payload: dict = Body(...)) -> dict:
-    return settings.mask(settings.save(payload))
+    try:
+        return settings.mask(settings.save(payload))
+    except settings.KeyNeeded as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/settings/test-llm")
@@ -58,8 +61,14 @@ async def test_llm(payload: dict = Body(default={})) -> dict:
 @router.post("/settings/test-tts")
 async def test_tts(payload: dict = Body(default={})) -> FileResponse:
     """Voice a sample with the given (or saved) settings → the wav."""
-    c = dict(settings.load()["tts"])
-    c.update({k: v for k, v in (payload or {}).items() if v not in (None, "") and "•" not in str(v) and k != "text"})
+    s = settings.load()
+    over = {k: v for k, v in (payload or {}).items() if v not in (None, "") and "•" not in str(v) and k != "text"}
+    if "openai_api_key" not in over:
+        try:
+            settings.check_key_kept(s, "tts", over.get("openai_base_url"))
+        except settings.KeyNeeded as e:
+            raise HTTPException(400, str(e))
+    c = dict(s["tts"]) | over
     if c.get("provider") == "none":
         raise HTTPException(400, "当前设置为不配音")
     text = str(payload.get("text") or "你好，这是配音试听。我们来聊一个有意思的问题。")[:200]

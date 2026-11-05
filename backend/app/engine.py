@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 from pathlib import Path
 from typing import Callable
 
@@ -82,15 +83,57 @@ def _last_json(text: str):
 
 # ── script.js ──────────────────────────────────────────────────────
 
+_perm_flag: str | None = None
+
+
+def permission_flag() -> str:
+    """Node's permission model: `--permission` (Node ≥ 22.13), `--experimental-permission` before; '' if neither."""
+    global _perm_flag
+    if _perm_flag is None:
+        _perm_flag = ""
+        for flag in ("--permission", "--experimental-permission"):
+            try:
+                ok = subprocess.run([config.NODE, flag, "--allow-fs-read=*", "-e", "0"], capture_output=True,
+                                    timeout=20).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+            if ok:
+                _perm_flag = flag
+                break
+    return _perm_flag
+
+
+def read_script_cmd(d: Path) -> list[str]:
+    """read-script.mjs, allowed to read only itself and the one script.js: `vm` is not a security boundary, so a
+    script.js that escapes it still cannot read settings, other projects or spawn processes."""
+    js = (JS / "read-script.mjs").resolve()
+    script = (d / "script.js").resolve()
+    flag = permission_flag()
+    perm = [flag, f"--allow-fs-read={js}", f"--allow-fs-read={script}"] if flag else []
+    return [config.NODE, *perm, str(js), str(script.parent)]
+
+
+# script.js read as data, by file identity: the workspace asks for it every few seconds while a job runs
+_script_cache: dict[str, tuple[tuple, str]] = {}
+
+
 async def read_script(d: Path) -> dict:
-    if not (d / "script.js").exists():
+    f = d / "script.js"
+    try:
+        st = f.stat()
+    except FileNotFoundError:
         return {"META": {}, "PAGES": []}
-    code, out, err = await run([config.NODE, str(JS / "read-script.mjs"), str(d)], d, 30)
+    ident = (st.st_ino, st.st_mtime_ns, st.st_size)
+    hit = _script_cache.get(str(f))
+    if hit and hit[0] == ident:
+        return json.loads(hit[1])
+    code, out, err = await run(read_script_cmd(d), d, 30, env={"PATH": os.environ.get("PATH", "")})
     data = _last_json(out)
     if not isinstance(data, dict):
         raise ToolError(f"读取 script.js 失败：{(err or out)[:400]}")
     if data.get("error"):
         raise ToolError(f"script.js 有语法错误：{data['error']}")
+    _script_cache[str(f)] = (ident, json.dumps(data, ensure_ascii=False))
     return data
 
 

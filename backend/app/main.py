@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from . import auth, config, routes_projects, routes_settings, routes_stages, store, thumbs
+from . import auth, config, engine, routes_projects, routes_settings, routes_stages, store, thumbs
 from .jobs import manager
 
 mimetypes.add_type("text/javascript", ".js")
@@ -22,6 +22,8 @@ mimetypes.add_type("audio/wav", ".wav")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.ensure_dirs()
+    if not await asyncio.to_thread(engine.permission_flag):
+        print("warning: this node has no permission model (needs Node >= 22.13): script.js is read unconfined", flush=True)
     manager.recover()
     for p in store.list_projects():
         try:
@@ -42,6 +44,9 @@ OPEN = ("/api/auth/", "/preview/", "/assets/", "/favicon")
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
+    size = request.headers.get("content-length", "")
+    if size.isdigit() and int(size) > config.MAX_UPLOAD_MB * 1024 * 1024:
+        return JSONResponse({"detail": f"上传太大（超过 {config.MAX_UPLOAD_MB}MB，可用 MAX_UPLOAD_MB 调整）"}, status_code=413)
     needs = path.startswith("/api/") or path.startswith("/files/")
     if auth.enabled() and needs and not path.startswith(OPEN) and not auth.valid_session(request.cookies.get(auth.COOKIE)):
         return JSONResponse({"detail": "需要登录"}, status_code=401)

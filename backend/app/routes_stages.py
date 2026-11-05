@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
@@ -116,13 +115,7 @@ async def voice_state(pid: str) -> dict:
     d = store.pdir(pid)
     p = store.get(pid)
     pages = await film.read_pages(d)
-    vjs: dict = {}
-    f = d / "voice.js"
-    if f.exists():
-        try:
-            vjs = json.loads(f.read_text("utf-8").split("SCRIPT.VOICE = ", 1)[1].rstrip().rstrip(";"))
-        except (IndexError, json.JSONDecodeError):
-            vjs = {}
+    vjs = voice.read_voice_js(d) or {}
     vp = vjs.get("pages") or []
     rows = []
     for pi, pg in enumerate(pages):
@@ -147,7 +140,7 @@ async def own_take(pid: str, page: str, i: int, file: UploadFile = File(...)) ->
     text = engine.cue_text(pg["cues"][i])
     tmp = d / ".studio" / "uploads" / f"take{Path(file.filename or 'a.webm').suffix or '.webm'}"
     tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_bytes(await file.read())
+    tmp.write_bytes(await store.read_upload(file, 50, "录音"))
     out = voice.override_file(d, page, text)
     (d / "audio").mkdir(exist_ok=True)
     try:
@@ -276,4 +269,7 @@ async def job_status(pid: str, job_id: str, since: int = 0) -> dict:
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel(pid: str, job_id: str) -> dict:
+    j = manager.get(job_id)
+    if not j or j.pid != pid:
+        raise HTTPException(404, "没有这个任务")
     return {"ok": manager.cancel(job_id)}

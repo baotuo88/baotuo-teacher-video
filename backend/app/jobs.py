@@ -125,9 +125,18 @@ class Manager:
         j = self.running.get(pid)
         return j if j and j.status == "running" else None
 
+    KEEP_FINISHED = 100
+
+    def prune(self) -> None:
+        """Forget all but the newest finished jobs: their logs stay on disk (job_status reads them from there)."""
+        done = sorted((j for j in self.jobs.values() if j.status != "running"), key=lambda j: j.ended or 0)
+        for j in done[:max(0, len(done) - self.KEEP_FINISHED)]:
+            del self.jobs[j.id]
+
     def start(self, pid: str, kind: str, fn: Callable[[Job], Awaitable[str | None]], label: str = "") -> Job:
         if self.current(pid):
             raise HTTPException(409, f"这个项目正在{self.current(pid).label}，等它结束或先取消")
+        self.prune()
         job = Job(pid, kind, label)
         self.jobs[job.id] = job
         self.running[pid] = job

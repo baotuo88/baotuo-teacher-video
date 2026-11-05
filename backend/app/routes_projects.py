@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import io
+import asyncio
 import json
 import re
 import shutil
@@ -68,13 +68,11 @@ async def create(payload: dict = Body(...)) -> dict:
     return store.get(p["id"])
 
 
-@router.post("/import")
-async def import_zip(file: UploadFile = File(...)) -> dict:
-    data = await file.read()
-    try:
-        z = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile:
-        raise HTTPException(400, "不是 zip 文件")
+IMPORT_MAX_FILES = 5000
+
+
+def _zip_layout(z: zipfile.ZipFile) -> tuple[str, list[zipfile.ZipInfo]]:
+    """The episode's folder inside the zip and the files to unpack from it, within the size limits."""
     names = z.namelist()
     root = ""
     if "script.js" not in names:
@@ -82,25 +80,80 @@ async def import_zip(file: UploadFile = File(...)) -> dict:
         root = next((t + "/" for t in tops if f"{t}/script.js" in names), "")
         if not root:
             raise HTTPException(400, "zip 里没有 script.js")
+    files = []
+    for info in z.infolist():
+        rel = info.filename[len(root):] if info.filename.startswith(root) else ""
+        # engine links, render output and this app's state are the server's own; index.html is written at create
+        if not rel or info.is_dir() or rel.startswith((".studio/", "engine", "out/")) or rel in ("index.html", ".gitignore"):
+            continue
+        if ".." in Path(rel).parts or rel.startswith("/") or "\\" in rel or "\x00" in rel:
+            continue
+        files.append(info)
+    if len(files) > IMPORT_MAX_FILES:
+        raise HTTPException(400, f"zip 里文件太多（超过 {IMPORT_MAX_FILES} 个）")
+    # what it unpacks to, not what it weighs: a small zip can expand to fill the disk
+    if sum(i.file_size for i in files) > config.MAX_UPLOAD_MB * 2 * 1024 * 1024:
+        raise HTTPException(400, f"zip 解压后太大（超过 {config.MAX_UPLOAD_MB * 2}MB）")
+    return root, files
+
+
+def _unpack(z: zipfile.ZipFile, root: str, files: list[zipfile.ZipInfo], d: Path) -> None:
+    for info in files:
+        target = d / info.filename[len(root):]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with z.open(info) as src, target.open("wb") as dst:
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+
+
+async def _adopt_episode(d: Path, pid: str) -> None:
+    """An imported script.js and voice.js are someone else's JavaScript: read them as data (confined) and write them
+    again as this app writes them, so from here on only data is ever run on the server side."""
+    try:
+        data = await engine.read_script(d)
+    except engine.ToolError as e:
+        raise HTTPException(400, f"zip 里的 script.js 读不出来：{str(e)[:300]}")
+    pages = data.get("PAGES")
+    if not isinstance(data.get("META"), dict) or not isinstance(pages, list) \
+            or not all(isinstance(pg, dict) and isinstance(pg.get("id"), str) for pg in pages):
+        raise HTTPException(400, "zip 里的 script.js 格式不对（META / PAGES）")
+    if (d / "voice.js").exists():
+        v = voice.read_voice_js(d)
+        if v is None:
+            (d / "voice.js").unlink()
+        else:
+            voice.write_voice_js(d, v)
+    await film.apply_meta(d, pid)
+
+
+@router.post("/import")
+async def import_zip(file: UploadFile = File(...)) -> dict:
+    if file.size is not None and file.size > config.MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(413, f"文件太大（超过 {config.MAX_UPLOAD_MB}MB）")
+    try:
+        z = zipfile.ZipFile(file.file)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "不是 zip 文件")
+    root, files = _zip_layout(z)
     pj = {}
-    if f"{root}.studio/project.json" in names:
+    if f"{root}.studio/project.json" in z.namelist():
         try:
             pj = json.loads(z.read(f"{root}.studio/project.json"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             pj = {}
-    p = store.create({k: pj[k] for k in store.DEFAULT_PROJECT if k in pj and k not in ("id", "jobs", "created", "updated")})
+    if not isinstance(pj, dict):
+        pj = {}
+    fields = {k: pj[k] for k in store.DEFAULT_PROJECT if k in pj and k not in ("id", "jobs", "created", "updated")}
+    if not styles.exists(str(fields.get("style") or "")):
+        fields["style"] = "whiteboard"
+    p = store.create(fields)
     d = store.pdir(p["id"])
-    for n in names:
-        rel = n[len(root):]
-        if not rel or n.endswith("/") or rel.startswith((".studio/", "engine", "out/")):
-            continue
-        if ".." in Path(rel).parts or rel.startswith("/"):
-            continue
-        target = d / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(z.read(n))
-    store.update(p["id"], lambda x: x.update({"jobs": [], "id": p["id"]}))
-    await film.apply_meta(d, p["id"])
+    try:
+        await asyncio.to_thread(_unpack, z, root, files, d)
+        store.update(p["id"], lambda x: x.update({"jobs": [], "id": p["id"]}))
+        await _adopt_episode(d, p["id"])
+    except BaseException:
+        store.delete(p["id"])
+        raise
     return store.get(p["id"])
 
 
@@ -210,7 +263,7 @@ async def add_url(pid: str, payload: dict = Body(...)) -> dict:
 @router.post("/{pid}/materials/file")
 async def add_file(pid: str, file: UploadFile = File(...)) -> dict:
     d = store.pdir(pid)
-    data = await file.read()
+    data = await store.read_upload(file, 50)
     name = file.filename or "file"
     if Path(name).suffix.lower() in materials.IMAGE_EXT:
         return await _save_asset(d, pid, name, data, "")
@@ -268,7 +321,8 @@ async def _save_asset(d: Path, pid: str, name: str, data: bytes, desc: str) -> d
 @router.post("/{pid}/assets")
 async def add_asset(pid: str, file: UploadFile = File(...), desc: str = Form("")) -> dict:
     d = store.pdir(pid)
-    return await _save_asset(d, pid, file.filename or "image.png", await file.read(), desc.strip()[:300])
+    return await _save_asset(d, pid, file.filename or "image.png", await store.read_upload(file, 30, "图片"),
+                             desc.strip()[:300])
 
 
 @router.patch("/{pid}/assets/{name}")
@@ -291,7 +345,7 @@ async def set_bgm(pid: str, file: UploadFile = File(...), vol: float = Form(-20)
     (d / "assets").mkdir(exist_ok=True)
     src = d / ".studio" / "uploads" / ("bgm" + Path(file.filename or "a.mp3").suffix.lower())
     src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_bytes(await file.read())
+    src.write_bytes(await store.read_upload(file, 200, "音乐文件"))
     dst = d / "assets" / "bgm.m4a"
     code, out, err = await engine.run([config.FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src), "-vn",
                                        "-ac", "2", "-ar", "48000", "-c:a", "aac", "-b:a", "160k", str(dst)], d, 300)

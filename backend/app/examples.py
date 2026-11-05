@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,14 +11,14 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from . import config, store, styles
+from . import config, engine, store, styles
 
 
 def _meta(script: Path) -> dict:
     """META.title / name / style of a sample's script.js (read with node: it is JavaScript)."""
-    js = config.ROOT / "backend" / "app" / "js" / "read-script.mjs"
     try:
-        out = subprocess.run([config.NODE, str(js), str(script.parent)], capture_output=True, text=True, timeout=20).stdout
+        out = subprocess.run(engine.read_script_cmd(script.parent), capture_output=True, text=True, timeout=20,
+                             env={"PATH": os.environ.get("PATH", "")}).stdout
         data = json.loads(out.strip().splitlines()[-1])
         return {"meta": data.get("META") or {}, "pages": len(data.get("PAGES") or [])}
     except (subprocess.SubprocessError, json.JSONDecodeError, IndexError, OSError):

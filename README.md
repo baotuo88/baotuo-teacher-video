@@ -73,6 +73,8 @@ docker compose build
 | `LLM_PROVIDER` / `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_AUTH` | 模型的默认配置（设置页保存后以设置页为准） |
 | `TTS_API_KEY` | OpenAI 兼容语音接口的 Key |
 | `APP_SECRET` | 签名会话用的密钥，不设则自动生成在 `data/.secret` |
+| `MAX_UPLOAD_MB` | 单次上传的上限，默认 2048（导入项目 zip 时最大） |
+| `ALLOW_PRIVATE_URLS` | 设为 `1` 才允许读取本机 / 内网网址作素材，默认拒绝 |
 
 模型选择：画面代码对模型要求较高，强模型（Claude、GPT、通义 Max 等）一次通过率高、修改轮数少。模型不能看图时，在设置里关掉「模型能看图」，只靠机器检查。
 
@@ -88,6 +90,14 @@ python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt
 scripts/fetch-engine.sh vendor
 scripts/dev-server.sh                     # 后端 :8765，数据在 /tmp/btv-data
 cd frontend && npm install && npm run dev # 前端 :5173，代理到后端
+```
+
+测试（CI 里每次构建镜像前都会跑，不通过就不发布镜像）：
+
+```bash
+.venv/bin/pip install -r backend/requirements-dev.txt
+cd backend && ../.venv/bin/python -m pytest -q
+cd frontend && npm run typecheck
 ```
 
 ## 结构
@@ -112,7 +122,10 @@ engine/package.json  引擎需要的浏览器库和字体（引擎本身由 scri
 ## 安全说明
 
 - 页面代码是模型写的 JavaScript：渲染和质检在容器里的无头 Chromium 中运行（`--no-sandbox`，容器是隔离边界）；浏览器里的预览放在不同源的沙箱 iframe 中，拿不到应用的 Cookie 和接口
-- 设置里的 API Key 保存在 `data/settings.json`（权限 600），接口返回时只显示首尾几位
+- 设置里的 API Key 保存在 `data/settings.json`（权限 600），接口返回时只显示首尾几位；改了接口地址就要重新填 Key，已保存的 Key 不会发往新地址
+- 引擎工具（质检、截图、渲染）运行时拿不到任何 Key 和密码；导入的项目 zip 里的 `script.js`、`voice.js` 只在受限的 node 进程中（Node 权限模型：只能读这一个文件，不能写文件、不能起子进程）当数据读出，再由服务端重新写出
+- 读网页素材只读公网地址，每次跳转都重新检查，单页最多 20MB
+- 只导入来源可信的项目 zip：其中的页面代码会在 Chromium 里运行，而容器里的 Chromium 不带沙箱
 - 对公网开放时务必设置 `APP_PASSWORD`，最好再在前面加一层 HTTPS 反向代理（浏览器里录音也需要 HTTPS 或 localhost）
 
 ## 许可

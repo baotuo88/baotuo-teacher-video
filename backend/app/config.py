@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -29,6 +30,19 @@ NODE = os.environ.get("NODE_BIN") or shutil.which("node") or "node"
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 
+def _int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+# the largest request body (a project zip is the largest upload), in MB
+MAX_UPLOAD_MB = _int("MAX_UPLOAD_MB", 2048)
+# reading material from web pages on this machine's own network (localhost, LAN, cloud metadata) is off unless set
+ALLOW_PRIVATE_URLS = os.environ.get("ALLOW_PRIVATE_URLS", "").lower() in ("1", "true", "yes")
+
+
 def _find_chrome() -> str | None:
     cands = [
         os.environ.get("CHROME_PATH"),
@@ -48,9 +62,13 @@ FFMPEG = os.environ.get("FFMPEG_PATH") or shutil.which("ffmpeg") or "ffmpeg"
 IN_DOCKER = Path("/.dockerenv").exists() or os.environ.get("BTV_IN_DOCKER") == "1"
 
 
+_SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$|^(APP_|LLM_|TTS_|ANTHROPIC_|OPENAI_)", re.I)
+
+
 def tool_env(webgl: bool = False) -> dict[str, str]:
-    """Environment for engine tools (node) and the Chrome they drive."""
-    env = os.environ.copy()
+    """Environment for engine tools (node) and the Chrome they drive. They run page code the model wrote, so they get
+    no credentials: none of them talk to a model or a voice service."""
+    env = {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
     if CHROME:
         env["CHROME_PATH"] = CHROME
     env["FFMPEG_PATH"] = FFMPEG

@@ -3,12 +3,19 @@ Everything is stored as text in <project>/materials/*.md (the storyboard's numbe
 
 from __future__ import annotations
 
+import asyncio
 import html
+import ipaddress
+import json
 import re
+import socket
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+
+from . import config
 
 MAX_CHARS = 120_000
 TEXT_EXT = {".txt", ".md", ".markdown", ".csv", ".json", ".py", ".js", ".ts", ".html", ".htm", ".yaml", ".yml", ".rst"}
@@ -58,6 +65,64 @@ def html_text(src: str) -> tuple[str, str]:
 
 
 GH = re.compile(r"^https?://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?:/.*)?$")
+MAX_FETCH = 20 * 1024 * 1024
+MAX_REDIRECTS = 5
+
+
+class Blocked(ValueError):
+    pass
+
+
+async def _resolve(host: str) -> list[str]:
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return [i[4][0] for i in infos]
+
+
+async def check_host(url: str) -> None:
+    """Material is read from the public internet only: not from this machine, its network or a cloud metadata address
+    (anyone who can make a film could otherwise read those through the server). ALLOW_PRIVATE_URLS lifts this."""
+    u = httpx.URL(url)
+    if u.scheme not in ("http", "https") or not u.host:
+        raise Blocked("网址要以 http:// 或 https:// 开头")
+    if config.ALLOW_PRIVATE_URLS:
+        return
+    try:
+        addrs = await _resolve(u.host)
+    except OSError:
+        raise ValueError(f"找不到这个网站：{u.host}")
+    for a in addrs:
+        ip = ipaddress.ip_address(a.split("%", 1)[0])
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            raise Blocked(f"不读取内网或本机地址（{u.host} → {ip}）；确实需要请设置 ALLOW_PRIVATE_URLS=1")
+
+
+@dataclass
+class Page:
+    status: int
+    ctype: str
+    content: bytes
+    text: str
+
+
+async def _get(c: httpx.AsyncClient, url: str) -> Page:
+    """GET with every redirect hop checked, the body capped at MAX_FETCH."""
+    for _ in range(MAX_REDIRECTS + 1):
+        await check_host(url)
+        async with c.stream("GET", url) as r:
+            if r.is_redirect and r.headers.get("location"):
+                url = str(r.url.join(r.headers["location"]))
+                continue
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf += chunk
+                if len(buf) > MAX_FETCH:
+                    raise ValueError(f"网页太大（超过 {MAX_FETCH // 1024 // 1024}MB）")
+            data = bytes(buf)
+            return Page(r.status_code, r.headers.get("content-type", ""), data,
+                        data.decode(r.encoding or "utf-8", "replace"))
+    raise ValueError("网址跳转次数太多")
 
 
 async def fetch_url(url: str) -> tuple[str, str]:
@@ -66,45 +131,45 @@ async def fetch_url(url: str) -> tuple[str, str]:
     if not re.match(r"^https?://", url):
         raise ValueError("网址要以 http:// 或 https:// 开头")
     headers = {"user-agent": "Mozilla/5.0 (baotuo-teacher-video)"}
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers=headers) as c:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False, headers=headers) as c:
         m = GH.match(url)
         if m:
             owner, repo = m.group(1), m.group(2)
             parts = [f"# {owner}/{repo}", f"Repository: https://github.com/{owner}/{repo}", f"Owner: {owner}"]
             try:
-                r = await c.get(f"https://api.github.com/repos/{owner}/{repo}")
-                if r.status_code == 200:
-                    j = r.json()
+                r = await _get(c, f"https://api.github.com/repos/{owner}/{repo}")
+                if r.status == 200:
+                    j = json.loads(r.text)
                     parts += [f"Name: {j.get('name')}", f"Description: {j.get('description') or ''}",
                               f"Stars: {j.get('stargazers_count')}", f"Language: {j.get('language') or ''}",
                               f"Topics: {', '.join(j.get('topics') or [])}", f"License: {(j.get('license') or {}).get('spdx_id', '')}"]
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError):
                 pass
             readme = ""
             for branch in ("HEAD", "main", "master"):
                 for fname in ("README.md", "README.zh-CN.md", "readme.md", "README"):
                     try:
-                        r = await c.get(f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{fname}")
-                    except httpx.HTTPError:
+                        r = await _get(c, f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{fname}")
+                    except (httpx.HTTPError, ValueError):
                         continue
-                    if r.status_code == 200 and r.text.strip():
+                    if r.status == 200 and r.text.strip():
                         readme = r.text
                         break
                 if readme:
                     break
             if not readme:
                 try:
-                    r = await c.get(url)
-                    readme = html_text(r.text)[1] if r.status_code == 200 else ""
-                except httpx.HTTPError:
+                    r = await _get(c, url)
+                    readme = html_text(r.text)[1] if r.status == 200 else ""
+                except (httpx.HTTPError, ValueError):
                     pass
             if not readme:
                 raise ValueError("读不到这个仓库的 README（GitHub 访问不通？可以把 README 内容直接粘贴进来）")
             return f"{owner}-{repo}", "\n".join(parts) + "\n\n## README\n\n" + readme
-        r = await c.get(url)
-        if r.status_code >= 400:
-            raise ValueError(f"网页打不开（HTTP {r.status_code}）")
-        ctype = r.headers.get("content-type", "")
+        r = await _get(c, url)
+        if r.status >= 400:
+            raise ValueError(f"网页打不开（HTTP {r.status}）")
+        ctype = r.ctype
         if "pdf" in ctype:
             return Path(url).stem or "page", pdf_text(r.content)
         if "html" in ctype or r.text.lstrip().startswith("<"):

@@ -272,7 +272,10 @@ async def test(cfg_override: dict | None = None) -> dict:
     """A tiny call to check the settings work."""
     s = settings.load()
     if cfg_override:
-        s["llm"].update({k: v for k, v in cfg_override.items() if v not in (None, "") and "•" not in str(v)})
+        over = {k: v for k, v in cfg_override.items() if v not in (None, "") and "•" not in str(v)}
+        if "api_key" not in over:
+            settings.check_key_kept(s, "llm", over.get("base_url"))
+        s["llm"].update(over)
     cfg = s["llm"]
     if not cfg.get("api_key"):
         raise LLMError("没有 API Key")

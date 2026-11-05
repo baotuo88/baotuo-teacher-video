@@ -9,3 +9,5 @@ vendor/*
 *.log
 .claude/
 .DS_Store
+*.tsbuildinfo
+.pytest_cache/

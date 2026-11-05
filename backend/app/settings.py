@@ -51,6 +51,25 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SECRET_FIELDS = [("llm", "api_key"), ("tts", "openai_api_key")]
+# the address each secret is sent to
+SECRET_URLS = {"llm": "base_url", "tts": "openai_base_url"}
+
+
+class KeyNeeded(ValueError):
+    pass
+
+
+def _same_url(a: str, b: str) -> bool:
+    return (a or "").strip().rstrip("/").lower() == (b or "").strip().rstrip("/").lower()
+
+
+def check_key_kept(cur: dict, sec: str, new_url: str | None) -> None:
+    """A stored key is only ever sent to the address it was entered for: moving the address without typing the key
+    again would hand the key to whoever runs the new address."""
+    key = dict(SECRET_FIELDS)[sec]
+    if new_url is None or not cur[sec].get(key) or _same_url(new_url, cur[sec].get(SECRET_URLS[sec], "")):
+        return
+    raise KeyNeeded("接口地址改了：请重新填写 API Key（已保存的 Key 不会发往新地址）")
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -109,9 +128,11 @@ def save(new: dict) -> dict:
         except json.JSONDecodeError:
             cur = {}
     merged = _merge(_merge(DEFAULTS, cur), new)
+    before = load()
     for sec, key in SECRET_FIELDS:
         v = (new.get(sec) or {}).get(key)
         if v is None or v == "" or "•" in str(v):
+            check_key_kept(before, sec, (new.get(sec) or {}).get(SECRET_URLS[sec]))
             merged[sec][key] = (cur.get(sec) or {}).get(key, "")
     config.SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = config.SETTINGS_FILE.with_suffix(".tmp")

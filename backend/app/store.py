@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from . import config
 
@@ -200,6 +200,17 @@ def delete(pid: str) -> None:
         if at.is_symlink():
             at.unlink()
     shutil.rmtree(d)
+
+
+async def read_upload(file: UploadFile, max_mb: int, what: str = "文件") -> bytes:
+    """An upload's bytes, or 413 past `max_mb`."""
+    limit = max_mb * 1024 * 1024
+    if file.size is not None and file.size > limit:
+        raise HTTPException(413, f"{what}太大（超过 {max_mb}MB）")
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(413, f"{what}太大（超过 {max_mb}MB）")
+    return data
 
 
 def safe_path(root: Path, rel: str, allow_links: bool = False) -> Path:
