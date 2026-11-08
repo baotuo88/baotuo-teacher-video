@@ -231,13 +231,20 @@ def materials_block(materials: list[tuple[str, str]], limit: int = 60000) -> str
     return "\n\n".join(out)
 
 
-def assets_note(assets: dict[str, str], for_page: bool = False) -> str:
+def assets_note(assets: dict[str, str], for_page: bool = False, vectors: list[str] | None = None) -> str:
     if not assets:
         return ""
-    rows = "\n".join(f"- `assets/{n}`" + (f": {desc}" if desc else "") for n, desc in assets.items())
+    vector_note = ""
+    if vectors:
+        vector_note = ("\nSVG assets with native stroke animation (already registered; no @extras needed): "
+                       + ", ".join(f"`{n}`" for n in vectors)
+                       + ". Use `P.vector('<filename.svg>', x, y, w, h, {at: P.c(0), dur: 2})` for these, "
+                       "not P.img. Strokes draw in order; fills/text fade in. Use the exact filename including .svg. "
+                       "No generated/paid assets are available.\n")
+    rows = vector_note + "\n".join(f"- `assets/{n}`" + (f": {desc}" if desc else "") for n, desc in assets.items())
     if for_page:
         return ("\n\n## The user's own pictures\nThe user gave these pictures for the film. When this page's storyboard "
-                "uses one, place it with `P.img('assets/<file>', x, y, w, h, { fit: 'contain', at })`; never draw it "
+                "uses a raster picture, place it with `P.img('assets/<file>', x, y, w, h, { fit: 'contain', at })`; never draw it "
                 f"from memory.\n{rows}")
     return ("\nThe user gave these pictures for the film; plan beats that show them where they help (name the file in "
             f"the beat's object, e.g. \"the screenshot assets/home.png\"):\n{rows}")
@@ -264,7 +271,7 @@ def storyboard_prompt(p: dict, materials: list[tuple[str, str]], voiced: bool) -
         f"Further notes from the user: {p['notes']}" if p.get("notes") else "",
         GITHUB_NOTE.format(repo=p.get("repo") or "(see the material)") if p.get("kind") == "github" else "",
         f'Style: {p["style"]} (write "{p["style"]}" as the style in the storyboard).',
-        assets_note(p.get("assets") or {}),
+        assets_note(p.get("assets") or {}, vectors=p.get("vector_assets")),
         ("The material:\n\n" + materials_block(materials)) if materials else "",
         "Answer with the storyboard JSON, then your short report." + voice_note("storyboard", voiced) + lang_note("storyboard", p.get("lang", "zh")),
     ]
@@ -361,7 +368,7 @@ Its structure:
 
 ## This page's narration and timing ({'real voice' if t.get('voiced') else 'estimated; the real voice may run a little shorter'})
 The page lasts {t['end'] - t['start']:.2f}s; its narration ends at {t['speechEnd'] - t['start']:.2f}s (P.endT).
-{cues}{ending}{assets_note(p.get('assets') or {}, True)}
+{cues}{ending}{assets_note(p.get('assets') or {}, True, p.get('vector_assets'))}
 
 Answer with the complete pages/{pid}.js.{lang_note('page', p.get('lang', 'zh'))}"""
 

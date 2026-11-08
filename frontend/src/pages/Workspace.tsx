@@ -70,7 +70,7 @@ function JobDock({ pid, job, onEnd, onClose }: { pid: string; job: JobSummary; o
           <div className="l1">
             <b>{s.label}</b>
             {s.status === 'running' && <div className={`bar ${pct === null ? 'indeterminate' : ''}`}><div style={{ width: `${pct ?? 0}%` }} /></div>}
-            {pct !== null && <span className="count">{pr.done}/{pr.total}{pr.phase && pr.phase !== 'video' ? ` · ${pr.phase === 'audio' ? '混音' : '字幕'}` : ''}</span>}
+            {pct !== null && <span className="count">{pr.done}/{pr.total}{pr.phase && pr.phase !== 'video' ? ` · ${pr.phase === 'audio' ? '混音' : pr.phase === 'check' ? '成片检查' : '字幕'}` : ''}</span>}
           </div>
           <div className="l2">{last}</div>
         </div>

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import auth, config, engine, examples, film, materials, store, styles, thumbs, voice, zh
+from . import auth, config, engine, examples, film, materials, store, styles, thumbs, vector_assets, voice, zh
 from .jobs import manager
 
 router = APIRouter(prefix="/api/projects")
@@ -122,6 +122,14 @@ async def _adopt_episode(d: Path, pid: str) -> None:
             (d / "voice.js").unlink()
         else:
             voice.write_voice_js(d, v)
+    try:
+        names = store.get(pid).get("vector_assets") or []
+        vector_assets.prepare(d, names)
+        for name in names:
+            f = d / "assets" / name
+            f.write_text(vector_assets.sanitize(f.read_bytes()), "utf-8")
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, f"SVG 素材无效：{e}")
     await film.apply_meta(d, pid)
 
 
@@ -265,7 +273,7 @@ async def add_file(pid: str, file: UploadFile = File(...)) -> dict:
     d = store.pdir(pid)
     data = await store.read_upload(file, 50)
     name = file.filename or "file"
-    if Path(name).suffix.lower() in materials.IMAGE_EXT:
+    if Path(name).suffix.lower() in materials.IMAGE_EXT | {".svg"}:
         return await _save_asset(d, pid, name, data, "")
     try:
         text = materials.file_text(name, data)
@@ -309,12 +317,27 @@ async def _save_asset(d: Path, pid: str, name: str, data: bytes, desc: str) -> d
     if len(data) > 30 * 1024 * 1024:
         raise HTTPException(400, "图片太大（> 30MB）")
     ext = Path(name).suffix.lower()
-    if ext not in materials.IMAGE_EXT:
-        raise HTTPException(400, "只支持 png / jpg / webp / gif")
+    if ext not in materials.IMAGE_EXT | {".svg"}:
+        raise HTTPException(400, "只支持 png / jpg / webp / gif / svg")
+    if ext == ".svg":
+        if manager.current(pid):
+            raise HTTPException(409, "项目有任务在跑，请等待结束后再添加 SVG")
+        if len(store.get(pid).get("vector_assets") or []) >= 50:
+            raise HTTPException(400, "每个项目最多 50 个 SVG 素材")
+        try:
+            data = vector_assets.sanitize(data).encode("utf-8")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     (d / "assets").mkdir(exist_ok=True)
     f = materials.unique(d / "assets", _asset_name(name))
     f.write_bytes(data)
     store.update(pid, lambda x: x.setdefault("assets", {}).__setitem__(f.name, desc))
+    if ext == ".svg":
+        store.update(pid, lambda x: x.setdefault("vector_assets", []).append(f.name))
+        if (d / "script.js").exists():
+            await film.apply_meta(d, pid)
+        else:
+            vector_assets.prepare(d, store.get(pid)["vector_assets"])
     return {"name": f.name, "asset": True}
 
 
@@ -333,8 +356,18 @@ def describe_asset(pid: str, name: str, payload: dict = Body(...)) -> dict:
 
 
 @router.delete("/{pid}/assets/{name}")
-def del_asset(pid: str, name: str) -> dict:
-    store.safe_path(store.pdir(pid) / "assets", name).unlink()
+async def del_asset(pid: str, name: str) -> dict:
+    d = store.pdir(pid)
+    vectors = store.get(pid).get("vector_assets") or []
+    if name in vectors:
+        if manager.current(pid):
+            raise HTTPException(409, "项目有任务在跑，请等待结束后再删除 SVG")
+        if any(name in f.read_text("utf-8") for f in (d / "pages").glob("*.js")):
+            raise HTTPException(400, "页面仍引用此 SVG，请先修改或移除对应页面中的素材引用")
+        store.update(pid, {"vector_assets": [n for n in vectors if n != name]})
+    store.safe_path(d / "assets", name).unlink()
+    if name in vectors and (d / "script.js").exists():
+        await film.apply_meta(d, pid)
     store.update(pid, lambda x: x.setdefault("assets", {}).pop(name, None))
     return {"ok": True}
 

@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, engine, settings, store, styles, voice
+from . import config, engine, settings, store, styles, vector_assets, voice
 
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -103,6 +103,7 @@ async def apply_meta(d: Path, pid: str, pages: list | None = None, title: str | 
         page_states = p.get("pages") or {}
         live = {pg["id"] for pg in pages}
         extras = list(styles.extras(style)) + list(base.get("extras") or [])
+        extras += vector_assets.prepare(d, p.get("vector_assets") or [])
         uses_tex = False
         for pg_id in sorted(live):
             extras += (page_states.get(pg_id) or {}).get("extras") or []

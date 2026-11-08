@@ -53,6 +53,7 @@ DEFAULT_PROJECT: dict[str, Any] = {
     "logos": [],                  # brand logos the pages asked for (extras/logos.js)
     "pages": {},                  # id → { status, rounds, issues, problems, sheet, note, extras, logos, updated }
     "film_check": None,
+    "vector_assets": [],           # opt-in sanitized SVG filenames; old projects stay unchanged
     "assets": {},                 # file name → description
     "bgm": None,                  # { file, vol }
     "meta_base": {},              # META keys an imported film brought (extras, libs, vendor, webgl, look …)

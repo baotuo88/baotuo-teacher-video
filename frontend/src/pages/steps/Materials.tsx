@@ -86,12 +86,12 @@ export default function Materials() {
         </div>
       </Panel>
 
-      <Panel title="图片素材" icon={<ImageIcon />} sub="截图、产品图、示意图。写一句说明，导演会把它安排进合适的页面（原样放上去，不会重画）。" body="flush">
+      <Panel title="图片素材" icon={<ImageIcon />} sub="截图、产品图、SVG 示意图。写一句说明，导演会安排进合适的页面；普通图片原样展示，新上传的 SVG 可逐笔绘制。" body="flush">
         {images.map((n) => (
           <div key={n} className="mrow">
             <img className="asset-thumb" src={fileUrl(p.id, `assets/${n}`)} alt="" />
             <div className="grow col gap-s">
-              <span className="tiny mono muted">assets/{n}</span>
+              <span className="tiny mono muted">assets/{n}{n.endsWith('.svg') ? ' · SVG 矢量图' : ''}</span>
               <input defaultValue={p.assets[n] || ''} placeholder="这张图是什么、想用在哪（例：首页截图，用在介绍界面那页）"
                 onBlur={(e) => e.target.value !== (p.assets[n] || '') && api.patch(`${P(p.id)}/assets/${encodeURIComponent(n)}`, { desc: e.target.value }).then(() => { toast.ok('说明已保存'); reload(); }).catch(toast.err)} />
             </div>
@@ -99,9 +99,10 @@ export default function Materials() {
           </div>
         ))}
         <div className="panel-body" style={images.length ? { borderTop: '1px solid var(--line)' } : undefined}>
-          <Drop accept="image/png,image/jpeg,image/webp,image/gif" disabled={working} onFiles={(f) => upload(f, 'asset')}>
-            <ImagePlus /><b className="small">上传图片</b><small>点击或拖进来 · png / jpg / webp / gif</small>
+          <Drop accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" disabled={working} onFiles={(f) => upload(f, 'asset')}>
+            <ImagePlus /><b className="small">上传图片 / SVG 矢量图</b><small>点击或拖进来 · png / jpg / webp / gif / svg</small>
           </Drop>
+          <p className="tiny muted">SVG 可逐笔绘制，无需生图接口；最多 2MB / 2000 个元素。请使用带 viewBox 的基本路径 SVG，脚本、外链、图片、动画和样式表会被移除，复杂效果可能简化。上传后生成或修改页面才会使用素材，不会自动重画旧页面。</p>
         </div>
       </Panel>
 

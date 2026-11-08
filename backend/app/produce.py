@@ -8,7 +8,7 @@ import re
 import time
 from pathlib import Path
 
-from . import draw, engine, film, llm, plan, prompts, settings, store, styles, thumbs, voice
+from . import draw, engine, film, llm, output_check, plan, prompts, settings, store, styles, thumbs, voice
 from .jobs import Job, Stop, manager
 from .llm import Msg
 
@@ -64,10 +64,13 @@ async def render_job(job: Job, fps: int | None = None, workers: int | None = Non
     missing = [pg["id"] for pg in pages if film.page_code(d, pg["id"]) is None]
     if missing:
         job.log(f"这些页还没有画面，会显示成标题页：{' '.join(missing)}", "warn")
-    await film.apply_meta(d, job.pid)
+    meta = (await film.apply_meta(d, job.pid))["META"]
     webgl = styles.is_webgl(p["style"])
     args = ["--fps", str(fps), "--workers", str(workers)] + ([] if subs and not draft else ["--skip-subs"])
     code, out, err = await engine.node(d, "render.mjs", [*args, "--plan"], 120, webgl=webgl)
+    if code:
+        raise RuntimeError(f"渲染计划失败：{(err or out)[-800:]}")
+    (d / "out" / "成片检查.md").unlink(missing_ok=True)
     plan_line = next((l for l in out.splitlines() if l.startswith("PLAN ")), "")
     segs = json.loads(plan_line[5:])["segments"] if plan_line else []
     total, cached = len(segs), sum(1 for s in segs if s.get("cached"))
@@ -102,7 +105,17 @@ async def render_job(job: Job, fps: int | None = None, workers: int | None = Non
         poller.cancel()
     if code:
         raise RuntimeError(f"渲染失败：{(err or out)[-800:]}")
-    films = [f for f in film.outputs(d) if f["name"].endswith(".mp4")]
+    job.set_progress(phase="check")
+    job.log("本地成片检查：完整解码、时长、分辨率与音轨（无需付费接口）")
+    suffixes = ["no-subtitles", "with-subtitles"] if meta.get("lang") == "en" else ["无字幕", "有字幕"]
+    outputs = [d / "out" / f"{meta.get('name') or 'video'}-{suffix}.mp4"
+               for suffix in suffixes[:2 if subs and not draft else 1]]
+    timeline = await engine.timeline(d)
+    results = await output_check.check(d, outputs, float(timeline["duration"]),
+                                       bool(meta.get("voice") or p.get("bgm")))
+    output_check.write_report(d, results)
+    job.log(f"成片检查通过：{len(results)} 个文件，报告见「成片检查.md」")
+    films = [{"name": f.name} for f in outputs]
     rec = {"at": time.time(), "fps": fps, "subs": subs and not draft, "seconds": round(time.time() - t0),
            "files": [f["name"] for f in films[:2]]}
     store.update(job.pid, lambda x: x.__setitem__("renders", ([rec] + (x.get("renders") or []))[:10]))

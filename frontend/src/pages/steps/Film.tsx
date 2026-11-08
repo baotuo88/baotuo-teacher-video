@@ -90,7 +90,7 @@ export default function FilmStep() {
             ) : <div className="muted small">B 站、YouTube、抖音、视频号、小红书，一次生成。</div>}
           </Panel>
 
-          <Panel title="文件" icon={<FileArchive />} sub="成片、字幕、口播稿和项目包" body="flush">
+          <Panel title="文件" icon={<FileArchive />} sub="成片、字幕、口播稿、成片检查报告和项目包" body="flush">
             <div className="files">
               {[...films, ...docs].map((f) => (
                 <div key={f.name} className="frow">
@@ -120,6 +120,7 @@ export default function FilmStep() {
               </div>
             </div>}>
             <div className="col" style={{ gap: 16 }}>
+              <div className="tiny muted">导出后自动进行本地成片检查（完整解码、时长、分辨率、音轨），通过后生成报告，无额外 API 费用。</div>
               {missing > 0 && <Notice kind="warn">还有 {missing} 页没画，会显示成标题页。</Notice>}
               {(p.overview.voice === 'stale' || p.overview.voice === 'none') && <Notice>口播还没配音或改过：渲染前会先自动配音。</Notice>}
               <Field label="帧率" as="div" hint={fps === 60 ? '顺滑，但渲染慢一倍' : fps === 24 ? '最快' : '推荐'}>
